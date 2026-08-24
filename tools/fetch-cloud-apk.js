@@ -149,7 +149,9 @@ function expectedIdentity() {
   const manifest = fs.readFileSync(path.join(ROOT, 'AndroidManifest.xml'), 'utf8');
   const pkg = (manifest.match(/package="([^"]+)"/) || [])[1];
   const vn = (manifest.match(/android:versionName="([^"]+)"/) || [])[1] || '1.0.0';
-  return { label, pkg, vn };
+  const perms = [...manifest.matchAll(/<uses-permission android:name="([^"]+)"/g)]
+    .map(m => m[1]).sort();
+  return { label, pkg, vn, perms };
 }
 
 async function main() {
@@ -212,8 +214,11 @@ async function main() {
     throw new Error(`cloud APK package mismatch (expected ${id.pkg})`);
   if (!badging.includes(`versionName='${id.vn}'`))
     throw new Error(`cloud APK version mismatch (expected ${id.vn})`);
-  if (badging.includes('uses-permission'))
-    throw new Error('cloud APK unexpectedly requests permissions');
+  const perms = [...badging.matchAll(/uses-permission: name='([^']+)'/g)]
+    .map(m => m[1]).sort();
+  if (JSON.stringify(perms) !== JSON.stringify(id.perms))
+    throw new Error('cloud APK permission set differs from manifest allow-list: ' +
+      perms.join(', '));
   const certs = execFileSync(findApksigner(javaEnv()), ['verify', '--print-certs', apkPath],
     { encoding: 'utf8', env: javaEnv() });
   const dn = (certs.match(/Signer #1 certificate DN: (.+)/) || [])[1];
