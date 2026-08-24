@@ -8,11 +8,14 @@
     "build": "node build.js",
     "clean": "node tools/clean.js",
     "verify": "node tools/verify.js",
-    "deliver": "node tools/deliver.js",
-    "cloud": "node tools/fetch-cloud-apk.js && node tools/deliver.js",
+    "cloud": "node tools/fetch-cloud-apk.js",
     "version": "node tools/version.js show",
-    "icons": "node tools/genicons.js"
+    "icons": "node tools/genicons.js",
+    "publish": "node tools/release.js",
+    "ship": "npm run cloud && npm run publish"
   },
   "license": "MIT",
-  "engines": { "node": ">=14" }
+  "engines": {
+    "node": ">=14"
+  }
 }

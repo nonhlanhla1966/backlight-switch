@@ -17,6 +17,7 @@ const path = require('path');
 const https = require('https');
 const zlib = require('zlib');
 const { execFileSync, spawnSync } = require('child_process');
+const { withRetry } = require('./net');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -168,7 +169,8 @@ async function main() {
   /* 1. Wait for the run of THIS commit to finish. */
   let run = null;
   while (Date.now() - started < timeoutMs) {
-    const r = await api(`/repos/${owner}/${repo}/actions/runs?head_sha=${sha}&per_page=10`);
+    const r = await withRetry(() => api(`/repos/${owner}/${repo}/actions/runs?head_sha=${sha}&per_page=10`),
+      { label: 'GitHub Actions polling', delayMs: 1500 });
     const runs = (r.json && r.json.workflow_runs) || [];
     run = runs.find(x => x.head_sha === sha) || null;
     if (run && run.status === 'completed') break;
@@ -188,47 +190,70 @@ async function main() {
   console.log(`[cloud] run ${run.id} succeeded (${run.html_url})`);
 
   /* 2. Find the APK artifact of that run. */
-  const arts = await api(`/repos/${owner}/${repo}/actions/runs/${run.id}/artifacts`);
+  const arts = await withRetry(() => api(`/repos/${owner}/${repo}/actions/runs/${run.id}/artifacts`),
+    { label: 'artifact list', delayMs: 1500 });
   const artifact = ((arts.json && arts.json.artifacts) || []).find(a => /\.apk$|apk/i.test(a.name)) ||
     ((arts.json && arts.json.artifacts) || [])[0];
   if (!artifact) throw new Error('no artifact uploaded by the successful run');
   console.log(`[cloud] artifact: ${artifact.name} (${artifact.size_in_bytes} bytes)`);
 
-  /* 3. Download + extract. */
-  const z = await download(artifact.archive_download_url, true, 0);
-  if (z.status !== 200) throw new Error('artifact download failed with HTTP ' + z.status);
+  /* 3. Download + extract. The buffer only resolves on a complete, clean
+   * HTTPS response - truncated transfers reject and are retried securely. */
+  const z = await withRetry(async () => {
+    const r = await download(artifact.archive_download_url, true, 0);
+    if (r.status !== 200) {
+      const e = new Error('artifact download failed with HTTP ' + r.status);
+      e.status = r.status;
+      throw e;
+    }
+    return r.buf;
+  }, { label: 'artifact download', delayMs: 2000 });
   const apk = extractApkFromZip(z.buf);
 
-  /* 4. Verify the cloud APK before trusting it. */
-  const tmpZip = path.join(ROOT, 'dist', '.cloud-artifact.zip');
-  fs.mkdirSync(path.dirname(tmpZip), { recursive: true });
-  fs.writeFileSync(tmpZip, z.buf);
+  /* 4. Verify BEFORE anything lands in dist/ (atomic publish): write to a
+   * .part file, run the full verification chain against it, then rename.
+   * dist/ never holds a partial or unverified APK, and any failure cleans
+   * up back to a known safe state. */
   const id = expectedIdentity();
-
   const distDir = path.join(ROOT, 'dist');
   fs.mkdirSync(distDir, { recursive: true });
-  for (const f of fs.readdirSync(distDir)) if (f.endsWith('.apk')) fs.unlinkSync(path.join(distDir, f));
-  const apkPath = path.join(distDir, `${id.apkName}-v${id.vn}.apk`);
-  fs.writeFileSync(apkPath, apk);
+  const finalPath = path.join(distDir, `${id.apkName}-v${id.vn}.apk`);
+  const partPath = finalPath + '.part';
+  const tmpZip = path.join(ROOT, 'dist', '.cloud-artifact.zip');
+  fs.writeFileSync(tmpZip, z.buf);
 
-  const badging = execFileSync(findAapt(), ['dump', 'badging', apkPath], { encoding: 'utf8' });
-  if (!badging.includes(`package: name='${id.pkg}'`))
-    throw new Error(`cloud APK package mismatch (expected ${id.pkg})`);
-  if (!badging.includes(`versionName='${id.vn}'`))
-    throw new Error(`cloud APK version mismatch (expected ${id.vn})`);
-  const perms = [...badging.matchAll(/uses-permission: name='([^']+)'/g)]
-    .map(m => m[1]).sort();
-  if (JSON.stringify(perms) !== JSON.stringify(id.perms))
-    throw new Error('cloud APK permission set differs from manifest allow-list: ' +
-      perms.join(', '));
-  const certs = execFileSync(findApksigner(javaEnv()), ['verify', '--print-certs', apkPath],
-    { encoding: 'utf8', env: javaEnv() });
-  const dn = (certs.match(/Signer #1 certificate DN: (.+)/) || [])[1];
-  if (!dn) throw new Error('cloud APK signature not verifiable');
+  try {
+    fs.writeFileSync(partPath, apk);
 
+    const badging = execFileSync(findAapt(), ['dump', 'badging', partPath], { encoding: 'utf8' });
+    if (!badging.includes(`package: name='${id.pkg}'`))
+      { const e = new Error(`cloud APK package mismatch (expected ${id.pkg})`); e.permanent = true; throw e; }
+    if (!badging.includes(`versionName='${id.vn}'`))
+      { const e = new Error(`cloud APK version mismatch (expected ${id.vn})`); e.permanent = true; throw e; }
+    const perms = [...badging.matchAll(/uses-permission: name='([^']+)'/g)]
+      .map(m => m[1]).sort();
+    if (JSON.stringify(perms) !== JSON.stringify(id.perms))
+      { const e = new Error('cloud APK permission set differs from manifest allow-list: ' +
+        perms.join(', ')); e.permanent = true; throw e; }
+    const certs = execFileSync(findApksigner(javaEnv()), ['verify', '--print-certs', partPath],
+      { encoding: 'utf8', env: javaEnv() });
+    const dn = (certs.match(/Signer #1 certificate DN: (.+)/) || [])[1];
+    if (!dn)
+      { const e = new Error('cloud APK signature not verifiable'); e.permanent = true; throw e; }
+
+    fs.renameSync(partPath, finalPath); /* atomic: verified bytes only */
+  } catch (err) {
+    try { fs.unlinkSync(partPath); } catch (_) {}
+    try { fs.unlinkSync(tmpZip); } catch (_) {}
+    throw err;
+  }
+  for (const f of fs.readdirSync(distDir)) {
+    const p = path.join(distDir, f);
+    if (f.endsWith('.apk') && p !== finalPath) fs.unlinkSync(p);
+  }
   fs.unlinkSync(tmpZip);
   console.log(`[cloud] verified: ${id.pkg} v${id.vn}, sig ${dn}`);
-  console.log('CLOUD APK READY ' + apkPath);
+  console.log('CLOUD APK READY ' + finalPath);
 }
 
 main().catch(err => { console.error('CLOUD FETCH FAILED:', err.message); process.exit(1); });

@@ -60,7 +60,8 @@ APP IDEA -> AUTOMATIC PRODUCT ANALYSIS -> AUTOMATIC UX/UI DESIGN
 -> LIGHTWEIGHT LOCAL VALIDATION (tests; local build only when useful)
 -> GIT COMMIT -> GITHUB PUSH -> GITHUB ACTIONS FINAL BUILD (default builder)
 -> CLOUD APK VERIFICATION + DOWNLOAD
--> APK DELIVERY (tools/deliver.js, verified destination) -> DOWNLOAD
+-> GITHUB RELEASE PUBLISH (verified asset) -> PRESENT DOWNLOAD LINK
+-> USER PRESSES LINK -> DEFAULT BROWSER DOWNLOADS -> USER INSTALLS
 ```
 
 ## Build system rules
@@ -84,15 +85,14 @@ builds stress the phone (CPU/heat), so they are the exception, not the rule.
 ```
 IDEA -> DESIGN -> CODE -> LOCAL LIGHTWEIGHT VALIDATION
 -> GIT PUSH -> GITHUB ACTIONS FINAL BUILD -> VERIFY ARTIFACT
--> DELIVER VERIFIED CLOUD APK -> DOWNLOAD
+-> GITHUB RELEASE PUBLISH -> DOWNLOAD AVAILABLE (user downloads)
 ```
 
-- The final delivered APK must be the verified GitHub Actions artifact
+- The final published APK must be the verified GitHub Actions artifact
   whenever one is available: `npm run cloud` waits for the Actions run of
-  the current commit, downloads the artifact, verifies badging, package,
-  version and signature into `dist/`, then `tools/deliver.js` performs the
-  full destination verification. Never substitute an unverified local APK
-  when a verified cloud APK exists.
+  the current commit, downloads the artifact and verifies badging, package,
+  version, permission allow-list and signature into `dist/`. Never substitute
+  an unverified local APK when a verified cloud APK exists.
 - Local builds are allowed only for: fast development feedback, diagnosing a
   build problem, validating a small change, or checking the project before a
   push. Do not repeatedly rebuild the whole app locally when Actions can do
@@ -153,39 +153,91 @@ appropriate fix, rebuild, retest. Maximum 3 automatic retries, then report the
 exact remaining error. No infinite loops, no unrelated edits, never hide or
 suppress errors.
 
-## Release and delivery
+## Network resilience and TLS policy
 
-- Final deliverable is a signed release-style APK named
-  `<AppName>-v<versionName>.apk`.
-- Signing uses a locally generated keystore cached in `keys/` (stable across
-  builds, never committed). This is self-signed - suitable for sideloading,
-  not Play-Store production signing. Report this limitation honestly.
+ALL network operations run under the shared retry policy in `tools/net.js`
+(`withRetry`): GitHub API requests, Actions polling, artifact downloads,
+release creation, APK uploads, HTTPS downloads, git push/pull, certificate
+and connection failures.
 
-### APK DELIVERY SUCCESS != BUILD SUCCESS
+Policy per failing operation:
 
-A printed path is NOT a delivery. For every app, run the full chain:
+1. Capture the exact error; stop the failed operation cleanly.
+2. Never continue with a partial, corrupted or unverified result.
+3. If the error is transient (DNS, connection reset/refused, timeout,
+   TLS/certificate verification, HTTP 429 or 5xx), retry the SAME operation:
+   max 3 attempts, short increasing delay, best-effort connectivity re-check.
+4. If any attempt succeeds, continue the normal workflow automatically -
+   never ask the user to manually retry routine transient failures.
+5. If all 3 attempts fail, stop safely and report:
+   `FAILED AFTER 3 ATTEMPTS — <exact error>`.
+
+Permanent errors fail immediately on attempt 1 with a clear explanation and
+are NEVER retried: invalid credentials (401/403), repository/not found (404),
+malformed request (400/422), invalid configuration, permission denied that
+cannot be resolved, invalid APK/signature.
+
+TLS rules - absolute:
+
+- NEVER disable TLS/HTTPS certificate verification.
+- No insecure flags (`--insecure`, `curl -k`, `GIT_SSL_NO_VERIFY`,
+  `NODE_TLS_REJECT_UNAUTHORIZED=0`, `rejectUnauthorized: false`).
+- Never bypass certificate validation; never accept an unverified APK.
+- Certificate verification errors are retried over the normal secure HTTPS
+  connection only; if they persist after 3 attempts, stop and report the
+  exact certificate error.
+
+Safe state after failures:
+
+- After a failed operation the factory returns to a known safe state before
+  retrying; partial artifacts are deleted (`*.part`), never used.
+- Downloads buffer fully before touching disk; dist/ is updated atomically
+  (write `.part` -> verify -> rename) so it can never hold a partial APK.
+- After a successful retry, run the full verification chain again:
+  APK exists -> integrity -> badging -> package -> version -> signature ->
+  SHA-256 -> release/download URL. Then continue.
+
+Report recovered operations as `RECOVERED AUTOMATICALLY — attempt X succeeded`.
+
+## Release, verification and browser-based download
+
+The factory NEVER copies APKs to `/storage/emulated/0/Download/` (or any
+phone storage) automatically, NEVER installs APKs, and NEVER requests
+phone-storage permissions. Downloading and installing are USER-CONTROLLED:
+the user presses the provided link, the DEFAULT BROWSER downloads the file,
+and the user decides whether to install it.
+
+Final deliverable is a signed release-style APK named
+`<AppName>-v<versionName>.apk`, published as a GitHub Release asset.
+Signing uses a locally generated keystore cached in `keys/` (stable across
+builds, never committed). Self-signed - suitable for sideloading, not
+Play-Store production signing. Report this limitation honestly.
+
+### BUILD SUCCESS -> APK VERIFIED -> APK PUBLISHED -> DOWNLOAD AVAILABLE
+
+These are distinct states. The ONLY correct final status is:
 
 ```
-BUILD -> FIND ACTUAL APK -> VERIFY SOURCE -> COPY -> VERIFY DESTINATION -> REPORT
+APK READY — DOWNLOAD AVAILABLE <https-url-of-release-asset>
 ```
 
-Always use `node tools/deliver.js` (`npm run deliver`). It locates the built
-APK, verifies badging + signature at the source, detects a genuinely writable
-public Download directory starting at `/storage/emulated/0/Download/`
-(fallbacks: `OPENCODE_DOWNLOAD_DIR`, `/sdcard/Download/`, `$HOME/Download/`),
-copies the file with mode **0644** (mode 600 root-owned files are invisible
-to Android apps - never ship them), then
-verifies the DESTINATION copy: exists, readable, size > 0, sha256 identical
-to source, package/versionName/versionCode readable from the destination
-file, signature valid. It also best-effort requests a MediaStore rescan.
+Never report "APK DELIVERY SUCCESS" - there is no automatic delivery.
 
-Never claim "APK DELIVERY SUCCESS" unless `tools/deliver.js` printed its
-success line after verifying the destination file. If any step fails, the
-workflow fails and shows the actual reason.
+Pipeline (`npm run ship` = cloud + publish):
 
-The generated test suite includes a Delivery section that runs this
-verification; on hosts without public storage (e.g. GitHub runners) it skips
-cleanly instead of failing.
+1. `npm run cloud` (`tools/fetch-cloud-apk.js`) waits for the GitHub Actions
+   run of the current commit, downloads the artifact and fully verifies it
+   into `dist/`: badging readable, package + versionName match the manifest,
+   permission set matches the manifest allow-list, signature valid.
+2. `npm run publish` (`tools/release.js`) creates-or-updates the GitHub
+   Release for the manifest version and attaches the VERIFIED APK as a
+   release asset (idempotent: replaces an existing same-name asset).
+3. Present the printed HTTPS URL as the final Download action, e.g.
+   `https://github.com/<owner>/<repo>/releases/download/v1.0.0/App-v1.0.0.apk`.
+   It is a stable public URL any browser can open.
+
+The old auto-copy delivery tooling is retired: no `deliver` script, no
+automatic writes to shared storage. Do not resurrect it.
 
 ## Automatic routine access
 
@@ -193,7 +245,7 @@ Perform all routine development operations immediately and automatically,
 using the permissions this environment already has: creating/editing project
 files and directories, running builds/tests/cleans, reading build logs,
 git init/add/commit/push, GitHub API calls (repo creation, Actions/artifact
-queries, releases), and copying the APK into Download.
+queries), and publishing GitHub Releases with verified APK assets.
 
 Do NOT stop to ask "may I...?" for these. Never ask the same permission twice.
 
