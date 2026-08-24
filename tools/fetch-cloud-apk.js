@@ -146,12 +146,14 @@ function findApksigner(env) {
 function expectedIdentity() {
   const strings = fs.readFileSync(path.join(ROOT, 'res', 'values', 'strings.xml'), 'utf8');
   const label = ((strings.match(/<string name="app_name">([^<]+)<\/string>/) || [])[1] || 'App').trim();
+  /* Match build.js APK naming: slugified label (Backlight-Switch-v1.0.0.apk) */
+  const apkName = label.replace(/[^\w\s-]/g, '').replace(/[\s_]+/g, '-');
   const manifest = fs.readFileSync(path.join(ROOT, 'AndroidManifest.xml'), 'utf8');
   const pkg = (manifest.match(/package="([^"]+)"/) || [])[1];
   const vn = (manifest.match(/android:versionName="([^"]+)"/) || [])[1] || '1.0.0';
   const perms = [...manifest.matchAll(/<uses-permission android:name="([^"]+)"/g)]
     .map(m => m[1]).sort();
-  return { label, pkg, vn, perms };
+  return { label, pkg, vn, perms, apkName };
 }
 
 async function main() {
@@ -206,7 +208,7 @@ async function main() {
   const distDir = path.join(ROOT, 'dist');
   fs.mkdirSync(distDir, { recursive: true });
   for (const f of fs.readdirSync(distDir)) if (f.endsWith('.apk')) fs.unlinkSync(path.join(distDir, f));
-  const apkPath = path.join(distDir, `${id.label}-v${id.vn}.apk`);
+  const apkPath = path.join(distDir, `${id.apkName}-v${id.vn}.apk`);
   fs.writeFileSync(apkPath, apk);
 
   const badging = execFileSync(findAapt(), ['dump', 'badging', apkPath], { encoding: 'utf8' });
