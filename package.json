@@ -1,0 +1,18 @@
+{
+  "name": "backlight-switch",
+  "version": "1.0.0",
+  "description": "Android app built with Node.js and Android SDK command-line tools",
+  "private": true,
+  "scripts": {
+    "test": "node tests/run-tests.js",
+    "build": "node build.js",
+    "clean": "node tools/clean.js",
+    "verify": "node tools/verify.js",
+    "deliver": "node tools/deliver.js",
+    "cloud": "node tools/fetch-cloud-apk.js && node tools/deliver.js",
+    "version": "node tools/version.js show",
+    "icons": "node tools/genicons.js"
+  },
+  "license": "MIT",
+  "engines": { "node": ">=14" }
+}

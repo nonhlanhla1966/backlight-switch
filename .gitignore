@@ -1,0 +1,36 @@
+# Build outputs
+build/
+dist/
+
+# Generated R.java / classes
+gen/
+classes/
+
+# Java
+*.class
+
+# Keystores / signing secrets (generated at build time, never committed)
+keys/
+*.keystore
+*.jks
+*.idsig
+
+# Secrets / credentials - never commit these
+.env
+.env.*
+auth.json
+*token*
+*credentials*
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# Node
+node_modules/
+npm-debug.log*
