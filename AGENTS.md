@@ -199,6 +199,54 @@ Safe state after failures:
 
 Report recovered operations as `RECOVERED AUTOMATICALLY — attempt X succeeded`.
 
+## Autonomous orchestration (unattended pipeline)
+
+`tools/factory.js` runs the whole flow from a one-line idea without stopping
+for routine decisions:
+
+```
+IDEA -> DESIGN -> CODE -> TEST -> LOCAL_VALIDATION -> GITHUB_PUSH
+     -> CI_BUILD -> (CI_REPAIR <= 3) -> APK_VERIFY -> RELEASE
+     -> DOWNLOAD_READY ("APK READY — DOWNLOAD AVAILABLE <url>")
+```
+
+Rules:
+
+- Never stop between normal stages to ask whether to continue, edit files,
+  run tests, build, inspect logs, commit/push, or retry transient failures.
+- Checkpoints: every completed stage is recorded in `.factory-state.json`
+  (git-ignored). After any crash/stop, `--resume` detects the last completed
+  checkpoint, inspects the repository and continues from the safest
+  unfinished stage. Never repeat expensive completed stages; never restart
+  the app unnecessarily.
+- Recovery is finite: transient failures use the shared retry policy
+  (`tools/net.js`, max 3); local test/build repair max 3; CI repair max 3;
+  model failures fall through to the next model. No infinite loops.
+- Permissions: automatically use access the environment already legitimately
+  has (project storage, existing Git/GitHub credentials, existing network).
+  Missing capabilities are reported as exact requirements - never bypassed,
+  faked or weakened Android security.
+
+## Multi-model AI layer ($0 guarantee)
+
+`tools/models.js` discovers models from the existing host/OpenCode
+configuration (never invented, never new API keys):
+
+- Cost classes: free (local runtimes) / unknown (host-session models via the
+  pre-existing opencode CLI) / paid. Routing prefers free, then unknown.
+- Paid providers are NEVER used unless the user explicitly sets
+  `FACTORY_ALLOW_PAID=1`. Otherwise stop and report:
+  `Paid model/provider would be required.`
+- Finite fallback: timeout / unavailable / rate-limit / invalid output /
+  repeated build failure -> next model (status: `MODEL FALLBACK`).
+- Health tracking in `.factory-models.json`: repeated failures temporarily
+  deprioritize a model (10 min cooldown); one success forgives. No permanent
+  blacklisting.
+- Task roles (design/coding/debug/test/review) may map to different models;
+  with one usable model it does everything.
+- Secrets are redacted everywhere (`Models.redact`); credentials are never
+  placed in prompts, logs or commits.
+
 ## Release, verification and browser-based download
 
 The factory NEVER copies APKs to `/storage/emulated/0/Download/` (or any

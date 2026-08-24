@@ -229,6 +229,80 @@ check('AGENTS.md documents the thermal-safe cloud-first policy',()=>{
   assert(/never\s+bypass/i.test(a),'thermal-bypass prohibition missing');});
 
 
+section('Factory orchestration (checkpoint/resume/multi-model/$0)');
+check('orchestration modules inherited',()=>{
+  ['checkpoint.js','models.js','perm.js','factory.js','net.js'].forEach(f=>
+    assert(fs.existsSync(path.join(ROOT,'tools',f)),'missing tools/'+f));
+  const Ckpt=require(path.join(ROOT,'tools','checkpoint'));
+  const ModelsMod=require(path.join(ROOT,'tools','models'));
+  const PermMod=require(path.join(ROOT,'tools','perm'));
+  assert(Ckpt.STAGES.includes('DOWNLOAD_READY'),'stage list incomplete');
+  assert(typeof ModelsMod.route==='function'&&typeof ModelsMod.redact==='function','models API missing');
+  assert(typeof PermMod.probeWrite==='function','perm API missing');});
+check('checkpoint roundtrip + resume skips completed stages',()=>{
+  const os=require('os'),Ckpt=require(path.join(ROOT,'tools','checkpoint'));
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ckpt-'));
+  const s=Ckpt.fresh('idea x');
+  Ckpt.save(dir,s);
+  const loaded=Ckpt.load(dir);
+  Ckpt.complete(dir,loaded,'TEST');
+  const again=Ckpt.load(dir);
+  assert(again.completed.TEST&&Ckpt.nextStage(again)==='LOCAL_VALIDATION','roundtrip broken');
+  const st=Ckpt.fresh(null);
+  st.stage='IDEA';
+  const plan=Ckpt.resumePlan(st,{hasManifest:true,hasGit:true,distApks:[]});
+  assert(plan.from==='TEST'&&!plan.skip.includes('TEST'),'resume plan wrong');});
+check('free-first routing; paid never routed without explicit opt-in',()=>{
+  const ModelsMod=require(path.join(ROOT,'tools','models'));
+  const reg={models:[{ref:'openai/gpt-x',provider:'openai',cost:'paid'},
+    {ref:'ollama/llama3',provider:'ollama',cost:'free'},
+    {ref:'host/m',provider:'host',cost:'unknown'}]};
+  const order=ModelsMod.route(reg,{});
+  if(order[0].ref!=='ollama/llama3')throw new Error('free model not first');
+  if(order.some(m=>m.cost==='paid'))throw new Error('paid leaked into route');
+  let msg=null;
+  try{ModelsMod.route({models:[{ref:'anthropic/c',provider:'anthropic',cost:'paid'}]},{});}catch(e){msg=e.message;}
+  assert(msg&&/Paid model\/provider would be required\./.test(msg),'paid prevention message wrong: '+msg);});
+check('model fallback on unavailable + rate limit; finite exhaustion',()=>{
+  const r=spawnSync(process.execPath,['-e',
+    'const path=require("path");const Models=require(path.join(process.argv[1],"tools","models"));'+
+    'const reg={models:[{ref:"a/dead",provider:"a",cost:"free"},'+
+    '{ref:"b/lim",provider:"b",cost:"free"},{ref:"c/ok",provider:"c",cost:"free"}]};'+
+    'const invoker=async ref=>{if(ref==="a/dead")throw Object.assign(new Error("command not found"),{kind:"unavailable"});'+
+    'if(ref==="b/lim")throw Object.assign(new Error("rate limit (429)"),{kind:"ratelimit"});return "ok-out";};'+
+    'Models.invoke({prompt:"t"},{registry:reg,health:{},invoker,validate:()=>true}).then(res=>{'+
+    'if(res.model!=="c/ok"||res.tried.length!==2)process.exit(1);'+
+    'let n=0;const reg2={models:[{ref:"x/d",provider:"x",cost:"free"}]};'+
+    'Models.invoke({prompt:"t"},{registry:reg2,health:{},validate:()=>true,'+
+    'invoker:async()=>{n++;throw new Error("unavailable");}})'+
+    '.then(()=>process.exit(1)).catch(e=>{if(/MODEL_EXHAUSTED/.test(e.message)&&n<=3)console.log("FALLBACK_OK");else process.exit(1);});})'+
+    '.catch(e=>{console.error(e.message);process.exit(1);});',
+    ROOT],{encoding:'utf8'});
+  assert(r.status===0&&/FALLBACK_OK/.test(r.stdout),(r.stderr||r.stdout).trim());});
+check('credential protection: redaction works, discovery skips secret keys',()=>{
+  const os=require('os'),ModelsMod=require(path.join(ROOT,'tools','models'));
+  const clean=ModelsMod.redact('tok ghp_abcdefghijklmnopqrstuv1234567890 sk-abcdef123456 password=hunter2');
+  assert(!/ghp_|sk-abcdef|hunter2/.test(clean),'redact missed secrets');
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),'cfg-'));
+  fs.mkdirSync(path.join(home,'.config','opencode'),{recursive:true});
+  fs.writeFileSync(path.join(home,'.config','opencode','opencode.json'),
+    JSON.stringify({model:'host/session-model',apiKey:'sk-SECRETVALUE'}));
+  const disc=ModelsMod.discover({},home);
+  assert(disc.models.some(m=>m.ref==='host/session-model'),'model not discovered');
+  assert(!JSON.stringify(disc).includes('SECRETVALUE'),'secret leaked into discovery');});
+check('permissions report exact requirements instead of prompting; no prompt code in tools',()=>{
+  const PermMod=require(path.join(ROOT,'tools','perm'));
+  const okRes=PermMod.probeWrite(require('os').tmpdir());
+  assert(okRes.ok===true,'tmp writable dir reported blocked');
+  const strip=src=>src.replace(/\/\*[\s\S]*?\*\//g,'').replace(/^\s*\/\/.*$/gm,'');
+  fs.readdirSync(path.join(ROOT,'tools')).filter(f=>f.endsWith('.js')).forEach(f=>{
+    const src=strip(fs.readFileSync(path.join(ROOT,'tools',f),'utf8'));
+    [/require\(\s*['"]readline['"]\s*\)/,/readline\s*\.\s*createInterface/,/\bconfirm\s*\(/,/\bprompt\s*\(/].forEach(p=>
+      assert(!p.test(src),f+' appears to prompt interactively'));});
+  const fsrc=strip(fs.readFileSync(path.join(ROOT,'tools','factory.js'),'utf8'));
+  ['FACTORY_ALLOW_PAID','APK READY — DOWNLOAD AVAILABLE','--resume'].forEach(s=>
+    assert(fsrc.includes(s),'factory.js missing: '+s));});
+
 section('Network retry policy (TLS never disabled)');
 check('net.js exists and exports the shared retry API',()=>{
   const Net=require(path.join(ROOT,'tools','net.js'));

@@ -22,6 +22,10 @@ auth.json
 *token*
 *credentials*
 
+# Factory runtime state (local only)
+.factory-state.json
+.factory-models.json
+
 # OS junk
 .DS_Store
 Thumbs.db
