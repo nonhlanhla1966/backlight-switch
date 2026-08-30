@@ -145,6 +145,18 @@ default Android icon:
   - church/hymn/content app -> navigation, content loading, search/favorites
 - Adapt the suite to what the app actually does; fail the workflow when
   critical verification fails.
+- WebView apps (UI in `www/`, native through `window` bridge) MUST include a
+  runtime interaction wiring suite in `npm test`: the harness in
+  `tests/ui-harness.js` loads the REAL index.html + bridge + app.js against a
+  strict recording mock and drives real button/input events end to end
+  (button -> handler -> bridge -> native -> result -> UI). It must prove
+  actions both EXECUTE and PERSIST (never just "look alive"), failed/refused
+  native ops surface as visible errors (never optimistic success), unsupported
+  capabilities are visible, and one failing handler never breaks the rest of
+  the UI. The same mechanism is the AppFactory permanent regression
+  (`factory/core/webtest.js` + `factory/tests/fixtures/webview.js`, run by
+  `node appfactory.js test`). CI runs `npm test` and FAILS the cloud build on
+  any wiring regression.
 
 ## Automatic error repair
 
