@@ -1,6 +1,6 @@
 {
   "name": "backlight-switch",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Android app built with Node.js and Android SDK command-line tools",
   "private": true,
   "scripts": {

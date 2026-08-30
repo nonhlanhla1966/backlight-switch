@@ -16,6 +16,11 @@ function check(name,fn){try{fn();passed++;console.log('  ok  '+name);}
 const assert=(c,m)=>{if(!c)throw new Error(m||'assertion failed');};
 const eq=(a,b,m)=>assert(JSON.stringify(a)===JSON.stringify(b),(m||'mismatch')+
   ' expected='+JSON.stringify(b)+' got='+JSON.stringify(a));
+/* Node 8-safe String.prototype.matchAll replacement (engine-local). */
+function allMatches(content,re){
+  const out=[];const rx=new RegExp(re.source,re.flags||'g');let m;
+  while((m=rx.exec(content)))out.push(m);
+  return out;}
 
 const Core = require(path.join(ROOT,'www','js','core.js'));
 
@@ -361,7 +366,7 @@ check('package/name/intent correct',()=>{
 const ALLOWED=['android.permission.WRITE_SETTINGS','android.permission.PACKAGE_USAGE_STATS',
   'android.permission.FOREGROUND_SERVICE','android.permission.RECEIVE_BOOT_COMPLETED'];
 check('permissions exactly match the required allow-list',()=>{
-  const found=[...MANIFEST.matchAll(/<uses-permission android:name="([^"]+)"/g)]
+  const found=allMatches(MANIFEST,/<uses-permission android:name="([^"]+)"/g)
     .map(m=>m[1]).sort();
   eq(found,[...ALLOWED].sort());});
 check('watcher service + boot receiver registered',()=>{
@@ -383,8 +388,8 @@ const APK_DIR=path.join(ROOT,'dist');
 let apkPath=null;
 check('manifest carries v2 identity + cleartext guard',()=>{
   const m=fs.readFileSync(path.join(ROOT,'AndroidManifest.xml'),'utf8');
-  assert(m.includes('android:versionName="2.0.0"'),'versionName not 2.0.0');
-  assert(m.includes('android:versionCode="2"'),'versionCode not 2');
+  assert(m.includes('android:versionName="2.0.1"'),'versionName not 2.0.1');
+  assert(m.includes('android:versionCode="3"'),'versionCode not 3');
   assert(m.includes('android:usesCleartextTraffic="false"'),'cleartext guard missing');});
 if(SKIP_BUILD){
   check('local APK build skipped (thermal-safe mode; CI builds + signs)',()=>true);
@@ -402,7 +407,7 @@ function deliverAapt(){
   throw new Error('no aapt for verification');}
 check('APK badging: package/version/label/minSdk26/icon/exact permissions',()=>{
   apkPath=path.join(APK_DIR,fs.readdirSync(APK_DIR).find(f=>f.endsWith('.apk')));
-  assert(path.basename(apkPath)==='Backlight-Switch-v2.0.0.apk','unexpected name '+apkPath);
+  assert(path.basename(apkPath)==='Backlight-Switch-v2.0.1.apk','unexpected name '+apkPath);
   const jh=(process.env.JAVA_HOME&&fs.existsSync(path.join(process.env.JAVA_HOME,'bin','javac')))
     ?process.env.JAVA_HOME:'/opt/java/jdk1.8.0_212';
   if(!fs.existsSync(path.join(jh,'bin','javac'))&&!process.env.JAVA_HOME)
@@ -416,10 +421,10 @@ check('APK badging: package/version/label/minSdk26/icon/exact permissions',()=>{
   const aapt=deliverAapt();
   badging=execFileSync(aapt,['dump','badging',apkPath],{encoding:'utf8'});
   assert(badging.includes("package: name='com.nonhlanhla1966.backlightswitch'"),'wrong package');
-  assert(badging.includes("versionName='2.0.0'"),'wrong version');
+  assert(badging.includes("versionName='2.0.1'"),'wrong version');
   assert(badging.includes("application-label:'Backlight Switch'"),'wrong label');
   assert(badging.includes("sdkVersion:'26'"),'minSdk wrong');
-  const perms=[...badging.matchAll(/uses-permission: name='([^']+)'/g)].map(m=>m[1]).sort();
+  const perms=allMatches(badging,/uses-permission: name='([^']+)'/g).map(m=>m[1]).sort();
   eq(perms,[...ALLOWED].sort(),'APK permission set differs from manifest allow-list');
   const listing=execFileSync(aapt,['list',apkPath],{encoding:'utf8'}).split('\n');
   assert(listing.includes('classes.dex'),'no dex');
@@ -615,5 +620,13 @@ check('partial cloud APKs rejected: atomic publish, verify before rename, cleanu
 
 console.log('\n========================================');
 console.log('PASSED: '+passed+'  FAILED: '+failed);
+
+/* Runtime WebView interaction wiring suite: drives the REAL index.html +
+ * app.js against a strict recording native mock. Runs even when a static
+ * test failed - it is the primary guard for the "buttons look alive but
+ * actions don't execute" class of defect. */
+try { require('./run-wiring-tests.js'); }
+catch (err) { console.error('WIRING SUITE CRASHED: ' + err.message); process.exit(1); }
+
 if(failed){failures.forEach(f=>console.log(' - '+f));process.exit(1);}
 console.log('ALL TESTS PASSED');

@@ -1,8 +1,10 @@
 /* Backlight Switch core logic - pure, dependency-free (UMD).
- * v2.0.0 "Best of the Best": adds a weekly brightness schedule with a
- * last-minute preview ramp, a priority regime (per-app > sensor > weekly,
- * manual wins over ALL scheduled settings), temperature-based per-app sensor
- * dimming, and accurate weekly recurrence.
+ * v2.0.1: fixes a runtime release-blocker where UI actions silently did not
+ * reach native (dirty-tracking by object identity, weekly.enabled vs active,
+ * opaque bridge error swallowing). v2.0.0 "Best of the Best" added the weekly
+ * brightness schedule with a last-minute preview ramp, a priority regime
+ * (per-app > sensor > weekly, manual wins over ALL scheduled settings),
+ * temperature-based per-app sensor dimming, and accurate weekly recurrence.
  *
  * The native service mirrors the transition + priority decisions so behavior
  * is verified in Node before it is shipped. Nothing in this file touches the

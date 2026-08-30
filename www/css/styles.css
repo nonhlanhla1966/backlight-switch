@@ -185,6 +185,11 @@ button.danger { background: transparent; color: var(--danger); }
   padding: 10px 16px; border-radius: 999px; z-index: 60;
   box-shadow: 0 6px 18px rgba(0,0,0,.4);
 }
+.toast.error {
+  background: rgba(255,107,107,.16); color: var(--danger);
+  border: 1px solid rgba(255,107,107,.45);
+  max-width: 86vw; text-align: center; line-height: 1.35;
+}
 .howto { padding-left: 18px; color: var(--text); font-size: 13.5px; }
 .howto li { margin-bottom: 6px; }
 

@@ -270,10 +270,16 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public boolean setAuto(boolean on) {
             prefs(MainActivity.this).edit().putBoolean(KEY_AUTO, on).apply();
-            Intent i = new Intent(MainActivity.this, BrightnessWatcherService.class);
-            if (on) startForegroundService(i);
-            else stopService(i);
-            return true;
+            try {
+                Intent i = new Intent(MainActivity.this, BrightnessWatcherService.class);
+                if (on) startForegroundService(i);
+                else stopService(i);
+                return true;
+            } catch (Exception e) {
+                // foreground-service start blocked by the OS policy -> the UI
+                // must see the failure, not an optimistic success.
+                return false;
+            }
         }
 
         @JavascriptInterface
@@ -283,8 +289,15 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void openWriteSettings() {
-            startActivity(new Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS,
-                    Uri.parse("package:" + getPackageName())));
+            try {
+                startActivity(new Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS,
+                        Uri.parse("package:" + getPackageName())));
+            } catch (Exception e) {
+                try {
+                    startActivity(new Intent(Settings.ACTION_SETTINGS));
+                } catch (Exception ignored) {
+                }
+            }
         }
 
         @JavascriptInterface

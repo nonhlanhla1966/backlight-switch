@@ -11,13 +11,30 @@
 
   var native = function () { return (typeof window !== 'undefined' && window.Android) || null; };
 
+  /* Last native-call failure (before the fallback was returned). Cleared on
+   * every successful call so a stale error can never linger on the UI. */
+  var lastErr = null;
+
+  function fail(op, message) {
+    lastErr = { op: op, message: message };
+    return lastErr;
+  }
+
   function respond(fn, fallback) {
     var n = native();
-    if (!n || typeof n[fn] !== 'function') return fallback;
+    if (!n) return fallback;
+    if (typeof n[fn] !== 'function') {
+      fail(fn, 'native bridge method missing: ' + fn);
+      return fallback;
+    }
     try {
       var v = n[fn].apply(n, Array.prototype.slice.call(arguments, 2));
+      lastErr = null;
       return v === undefined || v === null ? fallback : v;
-    } catch (e) { return fallback; }
+    } catch (e) {
+      fail(fn, String((e && e.message) || e));
+      return fallback;
+    }
   }
 
   function jsonString(v) { return JSON.stringify(v); }
@@ -30,7 +47,17 @@
   var Bridge = {
     available: false,
 
-    init: function () { Bridge.available = !!native(); return Bridge.available; },
+    /* True when a real Android bridge is injected (as opposed to demo/browser
+     * mode). The UI only surfaces native failures when this is true - demo
+     * mode keeps its optimistic mock behavior. */
+    running: false,
+
+    init: function () { Bridge.available = !!native(); Bridge.running = !!native(); return Bridge.available; },
+
+    /* Current failure (or null) from the most recent bridge call, so the UI
+     * can turn silent fallbacks into visible errors. */
+    err: function () { return lastErr; },
+    clearErr: function () { lastErr = null; },
 
     status: function (fallback) {
       var raw = respond('status', '{}');
@@ -81,6 +108,8 @@
     exposeMock: function (m) {
       if (typeof window !== 'undefined') window.Android = m;
       Bridge.available = !!m;
+      Bridge.running = !!m;
+      lastErr = null;
       return Bridge;
     },
 
@@ -88,5 +117,6 @@
   };
 
   Bridge.available = !!native();
+  Bridge.running = !!native();
   return Bridge;
 });

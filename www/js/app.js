@@ -7,17 +7,28 @@
   var C = window.BacklightCore;
   var B = window.BacklightBridge;
 
+  /* Real device mode (native bridge injected) vs demo/browser preview. Only
+   * real-mode surfaces native failures as visible errors - demo keeps the
+   * optimistic mock behavior so the page stays pleasant in a plain browser. */
+  var IS_NATIVE = !!B.running;
+
   /* ---------------------------------------------------------------- state */
   var apps = [];
   var filtered = [];
   var rules = C.parseRules(B.getRules());
-  var weekly = C.parseWeekly(B.getWeekly(), B.status());
+  var weekly = C.parseWeekly(B.getWeekly());
   var sensorRules = C.parseSensorRules(B.getSensorRules());
   var settings = C.parseSettings(B.status());
   var lastSensor = null;
   var search = '';
   var currentGlobal = 50;
-  var lastSaved = { rules: rules, weekly: weekly, sensor: sensorRules };
+  var globalErrShown = false;
+
+  /* Canonical serialized baselines of what the native store last accepted.
+   * saveAll() re-serializes the live objects and persists any difference, so
+   * every in-place edit (setRule/removeRule/setSensorRule/... mutate the same
+   * object) is detected - an object-identity snapshot could never catch it. */
+  var baseline = { rules: '', weekly: '', sensor: '' };
 
   var $ = function (id) { return document.getElementById(id); };
   var show = function (el) { if (el) el.classList.remove('hidden'); };
@@ -29,26 +40,63 @@
   }
 
   /* -------------------------------------------------------------- helpers */
-  function toast(msg) {
+  function toast(msg, isErr) {
     var t = $('toast');
     t.textContent = msg;
+    t.classList.toggle('error', !!isErr);
     t.classList.remove('hidden');
     t.classList.add('show');
     clearTimeout(t._t);
-    t._t = setTimeout(function () { t.classList.remove('show'); }, 1900);
+    t._t = setTimeout(function () { t.classList.remove('show'); }, isErr ? 4200 : 1900);
+  }
+
+  function toastErr(msg) { toast(msg, true); }
+
+  /* Deliver one native action. In real mode a native failure (exception, or a
+   * boolean action returning false) surfaces as an actionable visible error
+   * and the caller never reports optimistic success. okWhen 'bool' demands a
+   * strict true; void launchers (permission screens) only need no exception. */
+  function act(op, fn, okWhen) {
+    var res = { ok: true, value: undefined };
+    if (IS_NATIVE) {
+      B.clearErr();
+      try { res.value = fn(); } catch (e) {
+        res.ok = false;
+        res.error = { op: op, message: String((e && e.message) || e) };
+        return res;
+      }
+      var err = B.err();
+      B.clearErr();
+      if (err) { res.ok = false; res.error = err; return res; }
+      if (okWhen === 'bool') res.ok = res.value === true;
+    } else {
+      try { res.value = fn(); } catch (e) { res.ok = false; }
+    }
+    return res;
   }
 
   function saveAll(quiet) {
-    if (lastSaved.rules !== rules) {
-      B.saveRules(C.serializeRules(rules)); lastSaved.rules = rules;
+    var saved = 0;
+    var rj = C.serializeRules(rules);
+    if (rj !== baseline.rules) {
+      var r1 = act('saveRules', function () { return B.saveRules(rj); }, 'bool');
+      if (!r1.ok) { toastErr('Android does not allow this operation on this device. Could not save your changes.'); return false; }
+      baseline.rules = rj; saved += 1;
     }
-    if (lastSaved.weekly !== weekly) {
-      B.saveWeekly(C.serializeWeekly(weekly)); lastSaved.weekly = weekly;
+    var wj = C.serializeWeekly(weekly);
+    if (wj !== baseline.weekly) {
+      var r2 = act('saveWeekly', function () { return B.saveWeekly(wj); }, 'bool');
+      if (!r2.ok) { toastErr('Android does not allow this operation on this device. Could not save your changes.'); return false; }
+      baseline.weekly = wj; saved += 1;
     }
-    if (lastSaved.sensor !== sensorRules) {
-      B.saveSensorRules(C.serializeSensorRules(sensorRules)); lastSaved.sensor = sensorRules;
+    var sj = C.serializeSensorRules(sensorRules);
+    if (sj !== baseline.sensor) {
+      var r3 = act('saveSensorRules', function () { return B.saveSensorRules(sj); }, 'bool');
+      if (!r3.ok) { toastErr('Android does not allow this operation on this device. Could not save your changes.'); return false; }
+      baseline.sensor = sj; saved += 1;
     }
-    if (!quiet) toast('Saved');
+    if (!quiet && saved > 0) toast('Saved');
+    return true;
   }
 
   function repaintStatus() {
@@ -107,7 +155,7 @@
   }
 
   function repaintWeeklyUI() {
-    $('weeklyToggle').checked = !!weekly.enabled;
+    $('weeklyToggle').checked = !!weekly.active;
     $('weeklyHour').value = weekly.hour;
     $('weeklyMinute').value = weekly.minute;
     $('weeklyPct').value = weekly.pct;
@@ -128,7 +176,12 @@
     var now = new Date();
     var nowMs = now.getTime();
     var el = $('weeklyNext');
-    if (weekly.enabled && C.weeklyBlocked(weekly, st.lastManualAt, nowMs)) {
+    if (!weekly.active) {
+      el.textContent = 'schedule is off — flip the toggle to enable it';
+      $('weeklyInfo').textContent = 'At the trigger time the app dims to the preset level for 1 hour on each chosen weekday.';
+      return;
+    }
+    if (C.weeklyBlocked(weekly, st.lastManualAt, nowMs)) {
       el.textContent = 'suspended — manual change inside the current hour';
       $('weeklyInfo').textContent = 'Your manual slider change overrides tonight\u2019s preset; it re-arms at the next scheduled hour.';
       return;
@@ -230,18 +283,18 @@
     if (!currentSheetApp) return;
     var pct = Number($('sheetSlider').value);
     rules = C.setRule(rules, currentSheetApp.packageName, pct);
-    saveAll(true);
+    var ok = saveAll(true);
     repaintOverrides();
-    toast(currentSheetApp.label + ' → ' + pct + '%');
+    if (ok) toast(currentSheetApp.label + ' → ' + pct + '%');
     closeSheet();
   }
 
   function removeSheetApp() {
     if (!currentSheetApp) return;
     rules = C.removeRule(rules, currentSheetApp.packageName);
-    saveAll(true);
+    var ok = saveAll(true);
     repaintOverrides();
-    toast('Removed override');
+    if (ok) toast('Removed override');
     closeSheet();
   }
 
@@ -271,18 +324,18 @@
     var threshold = Number($('sensorThreshold').value);
     var pct = Number($('sensorRulePct').value);
     sensorRules = C.setSensorRule(sensorRules, pkg, threshold, pct);
-    saveAll(true);
+    var ok = saveAll(true);
     paintSensorRules();
-    toast('Sensor rule saved');
+    if (ok) toast('Sensor rule saved');
     closeSensorSheet();
   }
 
   function removeSensorSheetApp() {
     if (!currentSensorApp) return;
     sensorRules = C.removeSensorRule(sensorRules, currentSensorApp.packageName);
-    saveAll(true);
+    var ok = saveAll(true);
     paintSensorRules();
-    toast('Sensor rule removed');
+    if (ok) toast('Sensor rule removed');
     closeSensorSheet();
   }
 
@@ -290,7 +343,8 @@
   function bindEvents() {
     $('autoToggle').addEventListener('click', function () {
       var nowOn = B.getAuto();
-      B.setAuto(!nowOn);
+      var r = act('setAuto', function () { return B.setAuto(!nowOn); }, 'bool');
+      if (!r.ok) { toastErr('Android does not allow this operation on this device. The auto watcher could not be started.'); return; }
       toast(nowOn ? 'Auto brightness off' : 'Auto brightness on');
       setTimeout(repaintStatus, 250);
     });
@@ -299,7 +353,13 @@
       var v = Number(this.value);
       $('pctValue').textContent = v;
       previewLike(v);
-      B.setGlobal(v);
+      var r = act('setGlobal', function () { return B.setGlobal(v); }, 'bool');
+      if (!r.ok) {
+        if (!globalErrShown) toastErr('Android does not allow this operation on this device. Modify system settings permission is required.');
+        globalErrShown = true;
+        return;
+      }
+      globalErrShown = false;
       saveAll(true);
     });
     $('globalSlider').addEventListener('change', saveAll);
@@ -321,9 +381,11 @@
 
     QSA('.presets button[data-pct]').forEach(function (b) {
       b.addEventListener('click', function () {
-        B.setGlobal(Number(b.dataset.pct));
-        repaintPct(b.dataset.pct);
-        toast(b.dataset.pct + '% applied');
+        var pct = Number(b.dataset.pct);
+        var r = act('setGlobal', function () { return B.setGlobal(pct); }, 'bool');
+        if (!r.ok) { toastErr('Android does not allow this operation on this device. Modify system settings permission is required.'); return; }
+        repaintPct(pct);
+        toast(pct + '% applied');
       });
     });
 
@@ -333,10 +395,10 @@
     });
 
     $('weeklyToggle').addEventListener('change', function () {
-      weekly.enabled = this.checked;
-      saveAll(true);
+      weekly.active = this.checked;
+      var ok = saveAll(true);
       repaintWeeklyNext();
-      toast(this.checked ? 'Weekly schedule on' : 'Weekly schedule off');
+      if (ok) toast(this.checked ? 'Weekly schedule on' : 'Weekly schedule off');
     });
 
     $('weeklyHour').addEventListener('change', function () {
@@ -399,8 +461,14 @@
     $('sensorRemove').addEventListener('click', removeSensorSheetApp);
     $('sensorBackdrop').addEventListener('click', closeSensorSheet);
 
-    $('grantWrite').addEventListener('click', function () { B.openWriteSettings(); });
-    $('grantUsage').addEventListener('click', function () { B.openUsageAccess(); });
+    $('grantWrite').addEventListener('click', function () {
+      var r = act('openWriteSettings', function () { B.openWriteSettings(); });
+      if (!r.ok) toastErr('Android does not allow this operation on this device.');
+    });
+    $('grantUsage').addEventListener('click', function () {
+      var r = act('openUsageAccess', function () { B.openUsageAccess(); });
+      if (!r.ok) toastErr('Android does not allow this operation on this device.');
+    });
   }
 
   function QSA(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
@@ -449,6 +517,12 @@
     repaintWeeklyUI();
     repaintWeeklyNext();
 
+    /* Baseline reflects exactly what the native store holds after hydration,
+     * so the first user edit - and every later one - is detected. */
+    baseline.rules = C.serializeRules(rules);
+    baseline.weekly = C.serializeWeekly(weekly);
+    baseline.sensor = C.serializeSensorRules(sensorRules);
+
     var sn = C.sensorSupported(B);
     if (!sn) {
       $('sensorAdd').textContent = 'No thermal sensor on this device';
@@ -456,8 +530,8 @@
     }
 
     var v = B.version();
-    var vname = (v && v.name) || '2.0.0';
-    var vcode = (v && v.code) || '2';
+    var vname = (v && v.name) || '2.0.1';
+    var vcode = (v && v.code) || '3';
     $('appVersion').textContent = 'Backlight Switch ' + vname + ' (' + vcode + ')';
 
     bindEvents();
