@@ -1,4 +1,4 @@
-/* Backlight Switch - dark-first, amber accent */
+/* Backlight Switch - dark-first, amber accent, crescent identity */
 :root {
   --bg: #10131a;
   --card: #181d28;
@@ -11,7 +11,7 @@
   --ok: #3ddc84;
   --radius: 14px;
 }
-[data-theme="light"] {
+body.light {
   --bg: #f2f4f8;
   --card: #ffffff;
   --card2: #eef1f6;
@@ -34,19 +34,21 @@ body {
 }
 .brand { display: flex; align-items: center; gap: 12px; }
 .logo {
-  width: 40px; height: 40px; border-radius: 12px;
-  background:
-    radial-gradient(circle at 50% 58%, var(--accent) 0 27%, transparent 28%),
-    conic-gradient(from -90deg,
-      var(--accent) 0 6deg, transparent 6deg 39deg,
-      var(--accent) 39deg 51deg, transparent 51deg 84deg,
-      var(--accent) 84deg 96deg, transparent 96deg 129deg,
-      var(--accent) 129deg 141deg, transparent 141deg 174deg,
-      var(--accent) 174deg 186deg, transparent 186deg 219deg,
-      var(--accent) 219deg 231deg, transparent 231deg 264deg,
-      var(--accent) 264deg 276deg, transparent 276deg),
-    linear-gradient(160deg, #26304a, #12182a);
+  position: relative; width: 40px; height: 40px; border-radius: 12px;
+  background: linear-gradient(160deg, #26304a, #12182a);
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.06), 0 4px 14px rgba(0,0,0,.35);
+  overflow: hidden;
+}
+.logo::before {
+  content: ""; position: absolute; left: 5px; top: 5px;
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 14px rgba(255,181,69,.55);
+}
+.logo::after {
+  content: ""; position: absolute; left: 14px; top: 2px;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--bg);
 }
 h1 { font-size: 17px; font-weight: 700; letter-spacing: .2px; }
 .statusline { font-size: 12px; color: var(--muted); margin-top: 2px; }
@@ -103,7 +105,7 @@ input[type="range"]::-webkit-slider-thumb {
   border-radius: 50%; background: var(--accent);
   box-shadow: 0 2px 8px rgba(0,0,0,.4), 0 0 0 4px var(--accent-soft);
 }
-[data-theme="light"] input[type="range"]::-webkit-slider-runnable-track {
+body.light input[type="range"]::-webkit-slider-runnable-track {
   background: linear-gradient(90deg, #ffd98a, var(--card2));
 }
 
@@ -185,3 +187,46 @@ button.danger { background: transparent; color: var(--danger); }
 }
 .howto { padding-left: 18px; color: var(--text); font-size: 13.5px; }
 .howto li { margin-bottom: 6px; }
+
+/* ============ v2 additions: preview banner, schedule, sensor ============ */
+
+.banner {
+  background: var(--accent-soft); color: var(--accent);
+  border: 1px solid rgba(255,181,69,.35);
+  border-radius: var(--radius); padding: 12px 14px;
+  font-size: 13px; font-weight: 600; margin-bottom: 12px;
+  animation: fade .2s ease;
+}
+
+.grant:active { background: var(--card2); }
+.grant.ok .chip { background: rgba(61,220,132,.14); color: var(--ok); }
+
+.timepicker {
+  display: flex; align-items: center; gap: 10px;
+  justify-content: center; padding: 8px 0 14px;
+}
+.timepicker select {
+  -webkit-appearance: none; appearance: none;
+  background: var(--card2); color: var(--text);
+  border: none; border-radius: 12px;
+  font-size: 22px; font-weight: 700; text-align: center;
+  padding: 10px 14px; outline: none; min-width: 84px;
+}
+.timepicker > span.ampm { color: var(--accent); font-size: 13px; font-weight: 700; }
+
+.days { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 12px; }
+.days button {
+  flex: 1; min-width: 40px; padding: 8px 4px; border-radius: 999px;
+  border: none; background: var(--card2); color: var(--muted);
+  font-size: 12px; font-weight: 600;
+}
+.days button:nth-child(7) { flex: 1 1 100%; }
+.days button.on { background: var(--accent-soft); color: var(--accent); }
+
+.stat { font-size: 15px; font-weight: 700; color: var(--accent); margin: 4px 0 6px; }
+
+.fieldlabel { display: block; color: var(--muted); font-size: 12.5px; margin: 10px 0 0; }
+.fieldlabel:first-of-type { margin-top: 4px; }
+
+.actions button.primary { flex: 1; }
+.actions button.danger { flex: 0 0 auto; }

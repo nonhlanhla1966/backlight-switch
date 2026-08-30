@@ -1,6 +1,5 @@
 package com.nonhlanhla1966.backlightswitch;
 
-import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
@@ -25,13 +24,16 @@ import java.util.Set;
  * Host activity: renders the local HTML/CSS/JS app and exposes a minimal,
  * explicit JavascriptInterface bridge ("Android") for the operations the
  * web UI cannot do itself: brightness changes, special-permission consent
- * screens, app listing and rule persistence.
+ * screens, app listing, rule storage (per-app + weekly + sensor) and status.
  */
 public class MainActivity extends Activity {
 
     static final String PREFS = "backlight";
     static final String KEY_RULES = "rules";
     static final String KEY_AUTO = "auto";
+    static final String KEY_WEEKLY = "weekly";
+    static final String KEY_SENSOR = "sensorRules";
+    static final String KEY_LAST_MANUAL = "lastManualAt";
 
     private WebView webView;
 
@@ -100,6 +102,15 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** Remember that the user manually set brightness (blocks scheduled ones). */
+    static void markManual(Context c) {
+        prefs(c).edit().putLong(KEY_LAST_MANUAL, System.currentTimeMillis()).apply();
+    }
+
+    static long lastManualAt(Context c) {
+        return prefs(c).getLong(KEY_LAST_MANUAL, 0L);
+    }
+
     class Bridge {
 
         @JavascriptInterface
@@ -109,10 +120,42 @@ public class MainActivity extends Activity {
                 o.put("canWrite", Settings.System.canWrite(MainActivity.this));
                 o.put("usageAccess", hasUsageAccess());
                 o.put("auto", prefs(MainActivity.this).getBoolean(KEY_AUTO, false));
-                o.put("brightness", readBrightnessPercent(MainActivity.this));
+                o.put("global", readBrightnessPercent(MainActivity.this));
+                o.put("lastManualAt", lastManualAt(MainActivity.this) == 0L
+                        ? JSONObject.NULL : lastManualAt(MainActivity.this));
                 o.put("serviceRunning",
                         BrightnessWatcherService.isRunning(MainActivity.this));
+                JSONObject svc = BrightnessWatcherService.stateSnapshot(MainActivity.this);
+                if (svc != null) {
+                    o.put("previewing", svc.optBoolean("previewing", false));
+                    o.put("previewPct", svc.optInt("previewPct", 30));
+                    o.put("weeklyActive", svc.optBoolean("weeklyActive", false));
+                    o.put("sensorActive", svc.optBoolean("sensorActive", false));
+                    o.put("sensorVal", svc.has("sensorVal") ? svc.optDouble("sensorVal")
+                            : JSONObject.NULL);
+                    o.put("sensorSource", svc.optString("sensorSource", ""));
+                    o.put("muted", svc.optBoolean("screenOff", false));
+                    JSONObject cur = svc.optJSONObject("currentRule");
+                    o.put("currentRule", cur == null ? JSONObject.NULL : cur);
+                }
             } catch (Exception ignored) {
+            }
+            return o.toString();
+        }
+
+        @JavascriptInterface
+        public String version() {
+            JSONObject o = new JSONObject();
+            try {
+                android.content.pm.PackageInfo pi = getPackageManager()
+                        .getPackageInfo(getPackageName(), 0);
+                o.put("name", pi.versionName);
+                o.put("code", pi.versionCode);
+            } catch (Exception e) {
+                try {
+                    o.put("name", "2.0.0");
+                    o.put("code", 2);
+                } catch (Exception ignored) {}
             }
             return o.toString();
         }
@@ -136,7 +179,46 @@ public class MainActivity extends Activity {
             }
         }
 
-        /** Launchable apps as [{pkg,label}], deduplicated, label-sorted. */
+        @JavascriptInterface
+        public String getWeekly() {
+            return prefs(MainActivity.this).getString(KEY_WEEKLY, "{}");
+        }
+
+        @JavascriptInterface
+        public boolean saveWeekly(String json) {
+            try {
+                Weekly.parse(json); // validates shape; malformed -> default
+                prefs(MainActivity.this).edit().putString(KEY_WEEKLY, json).apply();
+                BrightnessWatcherService.nudge(MainActivity.this);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public String getSensorRules() {
+            return prefs(MainActivity.this).getString(KEY_SENSOR, "{}");
+        }
+
+        @JavascriptInterface
+        public boolean saveSensorRules(String json) {
+            try {
+                new JSONObject(json);
+                prefs(MainActivity.this).edit().putString(KEY_SENSOR, json).apply();
+                BrightnessWatcherService.nudge(MainActivity.this);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public String getSensor() {
+            return Sensor.read(MainActivity.this).toString();
+        }
+
+        /** Launchable apps as [{packageName,label}], deduplicated, sorted. */
         @JavascriptInterface
         public String getApps() {
             JSONArray arr = new JSONArray();
@@ -156,7 +238,7 @@ public class MainActivity extends Activity {
                 }
                 try {
                     JSONObject o = new JSONObject();
-                    o.put("pkg", pkg);
+                    o.put("packageName", pkg);
                     o.put("label", label);
                     items.add(o);
                 } catch (Exception ignored) {
@@ -174,6 +256,13 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public boolean setGlobal(int pct) {
+            if (pct < 5 || pct > 100) return false;
+            markManual(MainActivity.this);
+            return applyBrightnessPercent(MainActivity.this, pct);
+        }
+
+        @JavascriptInterface
+        public boolean preset(int pct) {
             if (pct < 5 || pct > 100) return false;
             return applyBrightnessPercent(MainActivity.this, pct);
         }

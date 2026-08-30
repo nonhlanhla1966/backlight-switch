@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Backlight Switch - global and per-app screen brightness with automatic apply/restore, a weekly schedule, last-minute preview and temperature sensor dimming. Fully offline.">
 <title>Backlight Switch</title>
 <link rel="stylesheet" href="css/styles.css">
 </head>
@@ -23,12 +24,18 @@
 <nav class="tabs" role="tablist">
   <button class="tab active" data-view="dash" role="tab">Brightness</button>
   <button class="tab" data-view="apps" role="tab">Per-App</button>
+  <button class="tab" data-view="schedule" role="tab">Schedule</button>
+  <button class="tab" data-view="sensor" role="tab">Sensor</button>
   <button class="tab" data-view="setup" role="tab">Setup</button>
 </nav>
 
 <main>
   <!-- ============ Dashboard ============ -->
   <section id="view-dash" class="view active">
+    <div id="previewBanner" class="banner hidden">
+      <span id="previewText">Preview: dimming…</span>
+    </div>
+
     <div class="card center-card">
       <div class="bigpct"><span id="pctValue">50</span><small>%</small></div>
       <input id="globalSlider" type="range" min="5" max="100" step="1" value="50"
@@ -41,7 +48,8 @@
         <button data-pct="100">100%</button>
       </div>
       <p class="hint">Global brightness applied system-wide. Apps with their own
-      override temporarily replace it and restore this level on exit.</p>
+      override temporarily replace it and restore this level on exit. Dragging
+      this slider beats every scheduled setting until the next schedule hour.</p>
     </div>
 
     <div class="card">
@@ -69,6 +77,82 @@
     <p id="appsEmpty" class="empty">No apps match.</p>
   </section>
 
+  <!-- ============ Weekly schedule ============ -->
+  <section id="view-schedule" class="view">
+    <div class="card row-between">
+      <div>
+        <h2>Weekly schedule</h2>
+        <p class="hint">At the chosen time the app dims to a preset level for a
+        set duration. App overrides beat it; your manual slider changes suspend
+        it for that hour.</p>
+      </div>
+      <label class="switch"><input type="checkbox" id="weeklyToggle"><span></span></label>
+    </div>
+
+    <div class="card">
+      <h2>Trigger time</h2>
+      <div class="timepicker">
+        <select id="weeklyHour" aria-label="Hour"></select>
+        <span>:</span>
+        <select id="weeklyMinute" aria-label="Minute"></select>
+        <span class="ampm" id="weeklyMeridiem"></span>
+      </div>
+      <div class="days" id="weeklyDays">
+        <button data-day="1">Mon</button>
+        <button data-day="2">Tue</button>
+        <button data-day="3">Wed</button>
+        <button data-day="4">Thu</button>
+        <button data-day="5">Fri</button>
+        <button data-day="6">Sat</button>
+        <button data-day="0">Sun</button>
+      </div>
+      <p class="hint">The preset runs for the current hour (60 min) after each
+      trigger. Repeats every week.</p>
+    </div>
+
+    <div class="card">
+      <h2>Preset level</h2>
+      <div class="bigpct small"><span id="weeklyPctValue">30</span><small>%</small></div>
+      <input id="weeklyPct" type="range" min="5" max="100" step="1" value="30"
+             aria-label="Weekly preset brightness">
+      <div class="presets">
+        <button data-wpct="10">10%</button>
+        <button data-wpct="25">25%</button>
+        <button data-wpct="40">40%</button>
+        <button data-wpct="60">60%</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Next activation</h2>
+      <p id="weeklyNext" class="stat">—</p>
+      <p id="weeklyInfo" class="hint">The last minute before each activation runs
+      a gradual dim preview; resolution is automatic.</p>
+    </div>
+  </section>
+
+  <!-- ============ Sensor ============ -->
+  <section id="view-sensor" class="view">
+    <div class="card center-card">
+      <h2>Device temperature</h2>
+      <div class="bigpct small"><span id="sensorTemp">—</span><small id="sensorUnit">°C</small></div>
+      <p id="sensorSource" class="hint">sampling…</p>
+      <button id="sensorRefresh" class="primary">Sample now</button>
+    </div>
+
+    <div class="card">
+      <h2>Sensor dim rules</h2>
+      <p class="hint">Pick an app and a temperature; while that app is open the
+      CPU/SoC temperature is above the threshold, its brightness drops toward
+      the target. Re-arms 2&nbsp;°C below the threshold (no flicker).</p>
+      <ul id="sensorList" class="rulelist"></ul>
+      <p id="sensorEmpty" class="empty">No sensor rules yet.</p>
+      <div class="row-between actions">
+        <button id="sensorAdd" class="primary">Add rule</button>
+      </div>
+    </div>
+  </section>
+
   <!-- ============ Setup ============ -->
   <section id="view-setup" class="view">
     <div class="card grant" id="grantWrite">
@@ -93,7 +177,9 @@
         <li>Grant both permissions above (one-time, system screens).</li>
         <li>Set a comfortable global brightness on the Brightness tab.</li>
         <li>In <b>Per-App</b>, tap an app and choose its own brightness.</li>
-        <li>Turn the top switch on. Opening that app applies its level;
+        <li>Add a <b>Schedule</b> to dim automatically at set times, and
+        <b>Sensor</b> rules to dim while an app makes the phone hot.</li>
+        <li>Turn the top switch on. Opening a ruled app applies its level;
         closing it restores your previous level automatically.</li>
       </ol>
       <p class="hint">A quiet notification keeps the watcher alive; it pauses
@@ -101,7 +187,7 @@
       if it was enabled.</p>
     </div>
     <div class="card row-between">
-      <div><h2>Version</h2><p class="hint">Backlight Switch 1.0.0</p></div>
+      <div><h2>Version</h2><p id="appVersion" class="hint">Backlight Switch …</p></div>
     </div>
   </section>
 </main>
@@ -126,8 +212,28 @@
   </div>
 </div>
 
+<!-- Sensor rule editor sheet -->
+<div id="sensorBackdrop" class="backdrop hidden"></div>
+<div id="sensorSheet" class="sheet hidden" role="dialog" aria-modal="true">
+  <h2>Sensor rule</h2>
+  <p id="sensorPkg" class="pkgname"></p>
+  <label class="fieldlabel" for="sensorThreshold">Trigger above</label>
+  <input id="sensorThreshold" type="range" min="30" max="95" step="0.5" value="55"
+         aria-label="Temperature threshold">
+  <div class="bigpct small"><span id="sensorThresholdValue">55</span><small>°C</small></div>
+  <label class="fieldlabel" for="sensorRulePct">Dim to</label>
+  <input id="sensorRulePct" type="range" min="5" max="100" step="1" value="20"
+         aria-label="Sensor dim level">
+  <div class="bigpct small"><span id="sensorRulePctValue">20</span><small>%</small></div>
+  <div class="row-between actions">
+    <button id="sensorRemove" class="danger">Remove rule</button>
+    <button id="sensorDone" class="primary">Save</button>
+  </div>
+</div>
+
 <div id="toast" class="toast hidden"></div>
 <script src="js/core.js"></script>
+<script src="js/bridge.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

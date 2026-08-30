@@ -52,9 +52,16 @@ jobs:
       - name: Verify APK
         run: npm run verify
 
+      - name: Show badging
+        run: |
+          "$ANDROID_HOME/build-tools/30.0.2/aapt" dump badging dist/*.apk > dist/badging.txt
+          head -25 dist/badging.txt || true
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: backlight-switch-apk
-          path: dist/*.apk
+          name: apk
+          path: |
+            dist/*.apk
+            dist/badging.txt
           if-no-files-found: error

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /*
  * Backlight Switch launcher icon - pure Node (zlib built-in).
- * Glyph: warm glowing sun with 8 rays on a deep indigo gradient tile.
+ * Glyph v2: a warm crescent moon with two small stars on a deep indigo
+ * gradient tile - "backlight" as gentle dimming light.
  */
 'use strict';
 const fs = require('fs');
@@ -34,37 +35,34 @@ function hex(c){return [parseInt(c.slice(1,3),16),parseInt(c.slice(3,5),16),pars
 function lerp(a,b,t){return a+(b-a)*t;}
 function mix(c1,c2,t){return [Math.round(lerp(c1[0],c2[0],t)),Math.round(lerp(c1[1],c2[1],t)),Math.round(lerp(c1[2],c2[2],t))];}
 
-/* Sun in 48-unit space: disc r=8 at (24,25); 8 rays from r=11.5 to r=17,
- * ray half-angle ~7deg; soft glow halo r=13. */
+/* Crescent in 48-unit space: warm disc r=11.5 at (24,25) carved by a
+ * background disc r=12.5 at (27.5,22) so a crescent faces bottom-left.
+ * Soft glow around the body; two accent star dots. */
 const CX=24, CY=25;
-function inSun(px, py) {
-  const dx=px-CX, dy=py-CY, d=Math.sqrt(dx*dx+dy*dy);
-  if (d <= 8) return 'disc';
-  if (d <= 12.2 && d > 8) return 'glow';
-  if (d >= 14.2 && d <= 19) {
-    let ang = Math.atan2(dy, dx);            // -PI..PI
-    if (ang < 0) ang += Math.PI * 2;         // 0..2PI
-    const seg = ang / (Math.PI / 4);         // 8 segments
-    const centre = (Math.floor(seg) + 0.5) * (Math.PI / 4);
-    let off = Math.abs(ang - centre);
-    // angular distance to nearest ray centre
-    const maxOff = 0.10;                      // ~5.7deg half-width
-    if (off > Math.PI/2) off = Math.abs(off - Math.PI);
-    if (off <= maxOff) return 'ray';
-  }
+function dist(px,py,cx,cy){const dx=px-cx,dy=py-cy;return Math.sqrt(dx*dx+dy*dy);}
+function inCrescent(px, py) {
+  const d1 = dist(px,py,24,25);
+  const d2 = dist(px,py,28,22.5);
+  if (d1 <= 11.5 && d2 > 12.5) return 'body';
+  if (d1 <= 14.5 && d1 > 11.5) return 'glow';
   return null;
+}
+function inStar(px, py) {
+  return dist(px,py,32.5,14.5) <= 1.5 || dist(px,py,16.5,33.5) <= 1.1;
 }
 
 function shapeAt(px, py) {
   const t = Math.min(1, Math.max(0, py / 48));
   let col = mix(hex('#2b3350'), hex('#10131f'), t);   // deep indigo gradient
-  const s = inSun(px, py);
-  if (s === 'disc') col = hex('#ffd166');
-  else if (s === 'ray') col = hex('#ffb545');
-  else if (s === 'glow') {
+  const s = inCrescent(px, py);
+  if (s === 'body') {
     const dx=px-CX, dy=py-CY, d=Math.sqrt(dx*dx+dy*dy);
-    col = mix(hex('#ffd166'), col, (d-8)/(12.2-8));    // fade glow into bg
+    col = mix(hex('#ffd166'), hex('#ffb545'), Math.min(1, Math.max(0, (d-3)/9)));
+  } else if (s === 'glow') {
+    const d = dist(px,py,24,25);
+    col = mix(hex('#ffd166'), col, (d-11.5)/(14.5-11.5));   // fade glow into bg
   }
+  if (inStar(px, py)) col = hex('#ffd166');
   return col;
 }
 
@@ -88,9 +86,9 @@ const DENSITIES={mdpi:48,hdpi:72,xhdpi:96,xxhdpi:144,xxxhdpi:192};
 const outRoot=path.join(__dirname,'..','res');
 for(const[d,size]of Object.entries(DENSITIES)){
   const dir=path.join(outRoot,'mipmap-'+d);
-  fs.mkdirSync(dir,{recursive:true});
+  try { fs.mkdirSync(dir); } catch (e) { if (e.code !== 'EEXIST') throw e; }
   fs.writeFileSync(path.join(dir,'ic_launcher.png'),encodePNG(size,size,draw(size,false)));
   fs.writeFileSync(path.join(dir,'ic_launcher_round.png'),encodePNG(size,size,draw(size,true)));
   console.log('mipmap-'+d+': OK');
 }
-console.log('Icons generated.');
+console.log('Icons generated (crescent).');
